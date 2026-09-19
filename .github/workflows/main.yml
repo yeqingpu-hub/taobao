@@ -16,7 +16,7 @@ jobs:
 
       - name: Extract Android project
         run: |
-          unzip -o TaoAutoRecorder_v0.2.zip
+          unzip -o TaoAutoRecorder_v0.2_fixed-1.zip
           echo "Project files:"
           find TaoAutoRecorder -maxdepth 3 -type f | sort
 
