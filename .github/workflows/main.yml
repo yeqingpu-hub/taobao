@@ -14,11 +14,23 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Extract Android project
+      - name: Find and extract V0.2 ZIP
+        shell: bash
         run: |
-          unzip -o TaoAutoRecorder_v0.2_fixed-1.zip
-          echo "Project files:"
-          find TaoAutoRecorder -maxdepth 3 -type f | sort
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name 'TaoAutoRecorder_*.zip' -print -quit)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: TaoAutoRecorder_*.zip not found"
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP_FILE"
+
+          unzip -o "$ZIP_FILE"
+
+          test -d TaoAutoRecorder
+
+          find TaoAutoRecorder -maxdepth 4 -type f | sort
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -31,11 +43,88 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Inspect and patch Android accessibility actions
+        working-directory: TaoAutoRecorder
+        shell: bash
+        run: |
+          set -e
+
+          SERVICE="$(find app/src/main/java -type f -name 'AutomationAccessibilityService.kt' -print -quit)"
+
+          if [ -z "$SERVICE" ]; then
+            echo "ERROR: AutomationAccessibilityService.kt not found"
+            find app/src/main/java -type f -name '*.kt' -print
+            exit 1
+          fi
+
+          echo "=== Service file ==="
+          echo "$SERVICE"
+
+          echo "=== Scroll action references BEFORE patch ==="
+          grep -nE 'ACTION_SCROLL_(RIGHT|LEFT)' "$SERVICE" || true
+
+          echo "=== Lines 315-335 BEFORE patch ==="
+          nl -ba "$SERVICE" | sed -n '315,335p' || true
+
+          python3 - "$SERVICE" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          # Remove obsolete static imports if present.
+          s = re.sub(
+              r'(?m)^import[ \t]+android\.view\.accessibility\.AccessibilityNodeInfo\.ACTION_SCROLL_(RIGHT|LEFT)[ \t]*\n',
+              '',
+              s,
+          )
+
+          # Fix fully-qualified old references.
+          s = s.replace(
+              'AccessibilityNodeInfo.ACTION_SCROLL_RIGHT',
+              'AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id',
+          )
+
+          s = s.replace(
+              'AccessibilityNodeInfo.ACTION_SCROLL_LEFT',
+              'AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id',
+          )
+
+          # Fix bare references.
+          s = re.sub(
+              r'(?<![A-Za-z0-9_.])ACTION_SCROLL_RIGHT(?![A-Za-z0-9_.])',
+              'AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id',
+              s,
+          )
+
+          s = re.sub(
+              r'(?<![A-Za-z0-9_.])ACTION_SCROLL_LEFT(?![A-Za-z0-9_.])',
+              'AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id',
+              s,
+          )
+
+          p.write_text(s, encoding="utf-8")
+
+          print("Patched:", p)
+          PY
+
+          echo "=== Scroll action references AFTER patch ==="
+          grep -nE 'ACTION_SCROLL_(RIGHT|LEFT)' "$SERVICE" || true
+
+          echo "=== Lines 315-335 AFTER patch ==="
+          nl -ba "$SERVICE" | sed -n '315,335p' || true
+
       - name: Build Debug APK
         working-directory: TaoAutoRecorder
+        shell: bash
         run: |
+          set -e
+
           gradle --version
-          gradle assembleDebug --stacktrace
+
+          gradle clean assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
